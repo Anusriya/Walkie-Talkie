@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Walkie-Talkie</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    .ptt-button {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      font-size: 1.2rem;
+      transition: all 0.2s;
+    }
+    .ptt-active {
+      transform: scale(0.95);
+      box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+    }
+    .status-indicator {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+    .status-connecting {
+      background-color: #ffc107;
+    }
+    .status-connected {
+      background-color: #198754;
+    }
+    .status-error {
+      background-color: #dc3545;
+    }
+    .audio-visualizer {
+      height: 100px;
+      background: linear-gradient(to top, #f8f9fa, #e9ecef);
+      border-radius: 5px;
+      overflow: hidden;
+      position: relative;
+    }
+    .audio-bar {
+      position: absolute;
+      bottom: 0;
+      width: 8px;
+      background-color: #0d6efd;
+      border-radius: 4px 4px 0 0;
+      transition: height 0.1s;
+    }
+    .frequency-btn {
+      margin: 0 5px;
+    }
+    .frequency-active {
+      background-color: #0d6efd;
+      color: white;
+    }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-lg-8">
+        <div class="card shadow-sm">
+          <div class="card-header bg-primary text-white">
+            <h2 class="mb-0"><i class="fas fa-walkie-talkie me-2"></i> Web Walkie-Talkie</h2>
+          </div>
+          <div class="card-body">
+            <!-- Frequency Selection -->
+            <div class="text-center mb-4">
+              <h4 class="mb-3"><i class="fas fa-tachometer-alt me-2"></i> Frequency Channel</h4>
+              <div class="btn-group" id="frequencyGroup">
+                <button class="btn btn-outline-primary frequency-btn frequency-active" data-frequency="channel1">Channel 1</button>
+                <button class="btn btn-outline-primary frequency-btn" data-frequency="channel2">Channel 2</button>
+                <button class="btn btn-outline-primary frequency-btn" data-frequency="channel3">Channel 3</button>
+              </div>
+            </div>
+
+            <!-- Connection Status -->
+            <div class="alert alert-info d-flex align-items-center">
+              <div class="status-indicator status-connecting" id="connectionIndicator"></div>
+              <div>
+                <span id="connectionStatus">Connecting to signaling server...</span>
+                <div class="progress mt-2" style="height: 5px;">
+                  <div id="connectionProgress" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Device Setup -->
+            <div class="row mb-4">
+              <div class="col-md-6">
+                <div class="card h-100">
+                  <div class="card-header bg-secondary text-white">
+                    <i class="fas fa-microphone me-2"></i> Your Device
+                  </div>
+                  <div class="card-body text-center">
+                    <div class="mb-3">
+                      <button id="initBtn" class="btn btn-primary btn-lg">
+                        <i class="fas fa-microphone me-2"></i> Initialize Microphone
+                      </button>
+                    </div>
+                    <div class="alert alert-warning small" id="micStatus">
+                      <i class="fas fa-info-circle me-2"></i> Microphone not initialized
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="card h-100">
+                  <div class="card-header bg-secondary text-white">
+                    <i class="fas fa-user-friends me-2"></i> Remote Device
+                  </div>
+                  <div class="card-body text-center">
+                    <div class="alert alert-info small" id="audioStatus">
+                      <i class="fas fa-headphones me-2"></i> Waiting for connection...
+                    </div>
+                    <div class="audio-visualizer mb-3" id="audioVisualizer">
+                      <div class="audio-bars-container d-flex justify-content-around align-items-end h-100 px-2"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Push-to-Talk Section -->
+            <div class="text-center mt-4">
+              <h4 class="mb-3"><i class="fas fa-broadcast-tower me-2"></i> Transmission Controls</h4>
+              <button id="pttBtn" class="btn btn-danger ptt-button" disabled>
+                <i class="fas fa-microphone me-2"></i> Hold to Talk
+              </button>
+              <div class="mt-3">
+                <div class="badge bg-secondary" id="pttStatus">
+                  <i class="fas fa-pause-circle me-2"></i> Ready
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer text-muted small">
+            <div class="d-flex justify-content-between">
+              <span id="connectionStats">ICE: Gathering | Signaling: Connected</span>
+              <span id="latencyIndicator">Latency: -- ms</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden audio element -->
+  <audio id="remoteAudio" autoplay playsinline></audio>
+
+  <!-- Bootstrap JS Bundle with Popper -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Socket.io -->
+  <script src="/socket.io/socket.io.js"></script>
+  
+  <script>
+    const socket = io();
+    let peerConnection;
+    let localStream;
+    let audioTracks = [];
+    let isTransmitting = false;
+    let audioContext;
+    let analyser;
+    let audioBars = [];
+    let currentFrequency = 'channel1';
+    const audioVisualizer = document.getElementById('audioVisualizer');
+    const audioBarsContainer = audioVisualizer.querySelector('.audio-bars-container');
+
+    // Create audio bars for visualization
+    for (let i = 0; i < 20; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'audio-bar';
+      bar.style.left = `${i * 10}px`;
+      audioBarsContainer.appendChild(bar);
+      audioBars.push(bar);
+    }
+
+    // Frequency selection
+    document.querySelectorAll('.frequency-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Update UI
+        document.querySelectorAll('.frequency-btn').forEach(b => b.classList.remove('frequency-active'));
+        btn.classList.add('frequency-active');
+        
+        // Update frequency
+        currentFrequency = btn.dataset.frequency;
+        document.getElementById('connectionStatus').textContent = `Switching to ${currentFrequency}...`;
+        
+        // Reinitialize connection with new frequency
+        if (peerConnection) {
+          peerConnection.close();
+          setupPeerConnection();
+        }
+      });
+    });
+
+    // Initialize microphone
+    document.getElementById('initBtn').addEventListener('click', async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log("Microphone access granted. Tracks:", localStream.getTracks());
+        
+        audioTracks = localStream.getAudioTracks();
+        disableMicrophone(); // Start with mic muted
+        
+        document.getElementById('micStatus').innerHTML = '<i class="fas fa-check-circle me-2"></i> Microphone ready';
+        document.getElementById('micStatus').className = 'alert alert-success small';
+        document.getElementById('initBtn').disabled = true;
+        document.getElementById('pttBtn').disabled = false;
+        
+        setupPeerConnection();
+        setupAudioAnalyser();
+      } catch (err) {
+        console.error("Microphone error:", err);
+        document.getElementById('micStatus').innerHTML = `<i class="fas fa-exclamation-triangle me-2"></i> Error: ${err.message}`;
+        document.getElementById('micStatus').className = 'alert alert-danger small';
+      }
+    });
+
+    // Push-to-Talk functionality
+    const pttBtn = document.getElementById('pttBtn');
+    pttBtn.addEventListener('mousedown', startTransmitting);
+    pttBtn.addEventListener('touchstart', startTransmitting);
+    pttBtn.addEventListener('mouseup', stopTransmitting);
+    pttBtn.addEventListener('touchend', stopTransmitting);
+    pttBtn.addEventListener('mouseleave', stopTransmitting);
+
+    function startTransmitting() {
+      if (!isTransmitting) {
+        enableMicrophone();
+        isTransmitting = true;
+        pttBtn.classList.add('ptt-active');
+        document.getElementById('pttStatus').innerHTML = '<i class="fas fa-broadcast-tower me-2"></i> TRANSMITTING';
+        document.getElementById('pttStatus').className = 'badge bg-danger';
+      }
+    }
+
+    function stopTransmitting() {
+      if (isTransmitting) {
+        disableMicrophone();
+        isTransmitting = false;
+        pttBtn.classList.remove('ptt-active');
+        document.getElementById('pttStatus').innerHTML = '<i class="fas fa-pause-circle me-2"></i> Ready';
+        document.getElementById('pttStatus').className = 'badge bg-secondary';
+      }
+    }
+
+    function enableMicrophone() {
+      audioTracks.forEach(track => {
+        track.enabled = true;
+        console.log("Microphone enabled");
+      });
+    }
+
+    function disableMicrophone() {
+      audioTracks.forEach(track => {
+        track.enabled = false;
+        console.log("Microphone disabled");
+      });
+    }
+
+    function setupAudioAnalyser() {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(localStream);
+      source.connect(analyser);
+      analyser.fftSize = 64;
+      
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      function updateVisualizer() {
+        requestAnimationFrame(updateVisualizer);
+        analyser.getByteFrequencyData(dataArray);
+        
+        if (isTransmitting) {
+          for (let i = 0; i < audioBars.length; i++) {
+            const value = dataArray[i % bufferLength] / 255;
+            const height = value * 100;
+            audioBars[i].style.height = `${height}%`;
+            audioBars[i].style.backgroundColor = `hsl(${200 + (value * 100)}, 100%, 50%)`;
+          }
+        } else {
+          for (let i = 0; i < audioBars.length; i++) {
+            audioBars[i].style.height = '0%';
+          }
+        }
+      }
+      
+      updateVisualizer();
+    }
+
+    // ===== WEBRTC SETUP =====
+    function setupPeerConnection() {
+      console.log("Setting up peer connection for frequency:", currentFrequency);
+      updateConnectionStatus(`Connecting to ${currentFrequency}...`, 'status-connecting');
+      
+      // Join the frequency room
+      socket.emit('joinFrequency', currentFrequency);
+      
+      peerConnection = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      // Add local tracks
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+      }
+
+      // ICE Candidate handling
+      peerConnection.onicecandidate = (e) => {
+        console.log("New ICE candidate:", e.candidate);
+        if (e.candidate) {
+          socket.emit('signal', { 
+            candidate: e.candidate,
+            frequency: currentFrequency 
+          });
+          updateConnectionStats(`ICE: ${peerConnection.iceGatheringState}`);
+        }
+      };
+
+      // ICE Connection State changes
+      peerConnection.oniceconnectionstatechange = () => {
+        updateConnectionStats(`ICE: ${peerConnection.iceConnectionState}`);
+        if (peerConnection.iceConnectionState === 'connected') {
+          updateConnectionStatus(`Connected to ${currentFrequency}`, 'status-connected');
+        } else if (peerConnection.iceConnectionState === 'disconnected') {
+          updateConnectionStatus('Connection lost', 'status-error');
+        }
+      };
+
+      // Remote track received
+      peerConnection.ontrack = (e) => {
+        console.log("Received remote track!", e.streams[0]);
+        if (!e.streams || e.streams.length === 0) return;
+        
+        const remoteAudio = document.getElementById('remoteAudio');
+        remoteAudio.srcObject = e.streams[0];
+        document.getElementById('audioStatus').innerHTML = '<i class="fas fa-check-circle me-2"></i> Connected to remote device';
+        document.getElementById('audioStatus').className = 'alert alert-success small';
+        
+        // Handle remote audio visualization
+        const remoteAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const remoteAnalyser = remoteAudioContext.createAnalyser();
+        const remoteSource = remoteAudioContext.createMediaStreamSource(e.streams[0]);
+        remoteSource.connect(remoteAnalyser);
+        remoteAnalyser.fftSize = 64;
+        
+        const bufferLength = remoteAnalyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        function updateRemoteVisualizer() {
+          requestAnimationFrame(updateRemoteVisualizer);
+          remoteAnalyser.getByteFrequencyData(dataArray);
+          
+          for (let i = 0; i < audioBars.length; i++) {
+            const value = dataArray[i % bufferLength] / 255;
+            const height = value * 100;
+            audioBars[i].style.height = `${height}%`;
+            audioBars[i].style.backgroundColor = `hsl(${value * 120}, 100%, 50%)`;
+          }
+        }
+        
+        remoteAudio.play().then(() => {
+          updateRemoteVisualizer();
+        }).catch(err => {
+          console.log("Autoplay prevented:", err);
+          document.getElementById('audioStatus').innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i> Click to allow audio playback';
+          document.getElementById('audioStatus').className = 'alert alert-warning small';
+          
+          const playAudio = () => {
+            remoteAudio.play().then(() => {
+              document.getElementById('audioStatus').innerHTML = '<i class="fas fa-check-circle me-2"></i> Connected to remote device';
+              document.getElementById('audioStatus').className = 'alert alert-success small';
+              document.body.removeEventListener('click', playAudio);
+              updateRemoteVisualizer();
+            });
+          };
+          document.body.addEventListener('click', playAudio);
+        });
+      };
+
+      // Create initial offer
+      createOffer();
+
+      // Handle incoming signals
+      socket.on('signal', (data) => {
+        // Only process signals for our current frequency
+        if (data.frequency !== currentFrequency) return;
+        
+        console.log("Received signal:", data);
+        
+        if (data.desc) {
+          const description = new RTCSessionDescription(data.desc);
+          console.log(`Setting remote ${description.type}`);
+          
+          peerConnection.setRemoteDescription(description)
+            .then(() => {
+              if (description.type === 'offer') {
+                console.log("Creating answer...");
+                return peerConnection.createAnswer();
+              }
+            })
+            .then(answer => {
+              if (answer) {
+                console.log("Created answer:", answer);
+                return peerConnection.setLocalDescription(answer);
+              }
+            })
+            .then(() => {
+              if (peerConnection.localDescription) {
+                console.log("Sending answer to signaling server");
+                socket.emit('signal', { 
+                  desc: peerConnection.localDescription,
+                  frequency: currentFrequency 
+                });
+                updateConnectionStats(`Signaling: ${peerConnection.signalingState}`);
+              }
+            })
+            .catch(err => console.error("Signal handling error:", err));
+        } else if (data.candidate) {
+          console.log("Adding ICE candidate");
+          peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
+            .catch(err => console.error("ICE candidate error:", err));
+        }
+      });
+    }
+
+    function createOffer() {
+      peerConnection.createOffer()
+        .then(offer => {
+          console.log("Created offer:", offer);
+          return peerConnection.setLocalDescription(offer);
+        })
+        .then(() => {
+          console.log("Sending offer to signaling server");
+          socket.emit('signal', { 
+            desc: peerConnection.localDescription,
+            frequency: currentFrequency 
+          });
+          updateConnectionStats(`Signaling: ${peerConnection.signalingState}`);
+        })
+        .catch(err => console.error("Offer error:", err));
+    }
+
+    function updateConnectionStatus(message, indicatorClass) {
+      const indicator = document.getElementById('connectionIndicator');
+      indicator.className = 'status-indicator ' + indicatorClass;
+      document.getElementById('connectionStatus').textContent = message;
+      
+      if (indicatorClass === 'status-connected') {
+        document.getElementById('connectionProgress').classList.remove('progress-bar-animated');
+        document.getElementById('connectionProgress').classList.add('bg-success');
+      }
+    }
+
+    function updateConnectionStats(stats) {
+      document.getElementById('connectionStats').textContent = stats;
+    }
+
+    // Error handling
+    window.addEventListener('error', (e) => {
+      console.error("Global error:", e.error);
+    });
+  </script>
+</body>
+</html>
